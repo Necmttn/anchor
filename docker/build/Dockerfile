@@ -10,7 +10,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 ARG SOLANA_CLI
 ARG ANCHOR_CLI
-ARG NODE_VERSION="v18.18.0"
+ARG NODE_VERSION="v20.16.0"
 
 ENV HOME="/root"
 ENV PATH="${HOME}/.cargo/bin:${PATH}"
@@ -38,7 +38,7 @@ RUN . $NVM_DIR/nvm.sh && \
     npm install -g yarn
 
 # Install Solana tools.
-RUN sh -c "$(curl -sSfL https://release.solana.com/${SOLANA_CLI}/install)"
+RUN sh -c "$(curl -sSfL https://release.anza.xyz/${SOLANA_CLI}/install)"
 
 # Install anchor.
 RUN cargo install --git https://github.com/coral-xyz/anchor --tag ${ANCHOR_CLI} anchor-cli --locked

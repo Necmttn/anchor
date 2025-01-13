@@ -28,6 +28,7 @@ SUBCOMMANDS:
     help       Prints this message or the help of the given subcommand(s)
     idl        Commands for interacting with interface definitions
     init       Initializes a workspace
+    keys       Program keypair commands
     migrate    Runs the deploy migration script
     new        Creates a new program
     shell      Starts a node shell with an Anchor client setup according to the local config
@@ -69,10 +70,25 @@ anchor build
 Builds programs in the workspace targeting Solana's BPF runtime and emitting IDLs in the `target/idl` directory.
 
 ```shell
+anchor build --skip-lint
+```
+
+Disables [Safety Checks](/docs/the-accounts-struct#safety-checks) during the build process.
+
+```shell
 anchor build --verifiable
 ```
 
 Runs the build inside a docker image so that the output binary is deterministic (assuming a Cargo.lock file is used). This command must be run from within a single crate subdirectory within the workspace. For example, `programs/<my-program>/`.
+
+{% callout title="Tip" %}
+It's possible to pass arguments to the underlying `cargo build-sbf` command with `-- <ARGS>`. For example:
+
+```
+anchor build -- --features my-feature
+```
+
+{% /callout %}
 
 ## Cluster
 
@@ -123,6 +139,14 @@ The `idl` subcommand provides commands for interacting with interface definition
 It's recommended to use these commands to store an IDL on chain, at a deterministic
 address, as a function of nothing but the program's ID. This
 allows us to generate clients for a program using nothing but the program ID.
+
+### Idl Build
+
+```shell
+anchor idl build
+```
+
+Generates the IDL for the program using the compilation method.
 
 ### Idl Init
 
@@ -196,6 +220,43 @@ Initializes a project workspace with the following structure.
 - `tests/`: Directory for JavaScript integration tests.
 - `migrations/deploy.js`: Deploy script.
 
+```shell
+anchor init --template multiple
+```
+
+Creates a more structured program project template (rather than only a single `lib.rs` file):
+
+```
+├── constants.rs
+├── error.rs
+├── instructions
+│   ├── initialize.rs
+│   └── mod.rs
+├── lib.rs
+└── state
+    └── mod.rs
+```
+
+## Keys
+
+Program keypair commands.
+
+### Keys List
+
+```shell
+anchor keys list
+```
+
+List all of the program keys.
+
+### Keys Sync
+
+```shell
+anchor keys sync
+```
+
+Sync program `declare_id!` pubkeys with the program's actual pubkey.
+
 ## Migrate
 
 ```shell
@@ -244,6 +305,12 @@ anchor test
 
 Run an integration test suit against the configured cluster, deploying new versions
 of all workspace programs before running them.
+
+```shell
+anchor test --skip-lint
+```
+
+Similar to `anchor build`, `--skip-lint` option disables [Safety Checks](/docs/the-accounts-struct#safety-checks).
 
 If the configured network is a localnet, then automatically starts the localnetwork and runs
 the test.

@@ -438,18 +438,18 @@ const miscTest = (
       ];
 
       assert.deepStrictEqual(expectedRaw, resp.raw.slice(0, -2));
-      assert.strictEqual(resp.events[0].name, "E1");
+      assert.strictEqual(resp.events[0].name, "e1");
       assert.strictEqual(resp.events[0].data.data, 44);
-      assert.strictEqual(resp.events[1].name, "E2");
+      assert.strictEqual(resp.events[1].name, "e2");
       assert.strictEqual(resp.events[1].data.data, 1234);
-      assert.strictEqual(resp.events[2].name, "E3");
+      assert.strictEqual(resp.events[2].name, "e3");
       assert.strictEqual(resp.events[2].data.data, 9);
-      assert.strictEqual(resp.events[3].name, "E5");
+      assert.strictEqual(resp.events[3].name, "e5");
       assert.deepStrictEqual(
         resp.events[3].data.data,
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       );
-      assert.strictEqual(resp.events[4].name, "E6");
+      assert.strictEqual(resp.events[4].name, "e6");
       assert.deepStrictEqual(
         resp.events[4].data.data,
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
@@ -1182,9 +1182,9 @@ const miscTest = (
         new anchor.Wallet(anchor.web3.Keypair.generate()),
         { commitment: program.provider.connection.commitment }
       );
+
       const anotherProgram = new anchor.Program(
-        miscIdl,
-        program.programId,
+        { ...miscIdl, address: program.programId },
         anotherProvider
       );
       // Request airdrop for secondary wallet.
@@ -2451,6 +2451,15 @@ const miscTest = (
       assert.deepStrictEqual(dataAccount.data, array2d);
     });
 
+    it("Can initialize 5 associated token accounts in one instruction", async () => {
+      const mint = anchor.web3.Keypair.generate();
+      await program.methods
+        .testInitManyAssociatedTokenAccounts()
+        .accounts({ mint: mint.publicKey, user: provider.wallet.publicKey })
+        .signers([mint])
+        .rpc();
+    });
+
     describe("Can validate PDAs derived from other program ids", () => {
       it("With bumps using create_program_address", async () => {
         const [firstPDA, firstBump] =
@@ -3229,6 +3238,76 @@ const miscTest = (
           })
         );
         assert.isDefined(thisTx);
+      });
+    });
+
+    describe("`zero` constraint unique account checks", () => {
+      it("Works with different accounts (multiple `zero`)", async () => {
+        const oneKp = anchor.web3.Keypair.generate();
+        const twoKp = anchor.web3.Keypair.generate();
+        await program.methods
+          .testMultipleZeroConstraint()
+          .preInstructions(
+            await Promise.all([
+              program.account.data.createInstruction(oneKp),
+              program.account.data.createInstruction(twoKp),
+            ])
+          )
+          .accounts({ one: oneKp.publicKey, two: twoKp.publicKey })
+          .signers([oneKp, twoKp])
+          .rpc();
+      });
+
+      it("Throws with the same account (multiple `zero`)", async () => {
+        const kp = anchor.web3.Keypair.generate();
+        try {
+          await program.methods
+            .testMultipleZeroConstraint()
+            .preInstructions([await program.account.data.createInstruction(kp)])
+            .accounts({ one: kp.publicKey, two: kp.publicKey })
+            .signers([kp])
+            .rpc();
+          assert.fail("Transaction did not fail!");
+        } catch (e) {
+          assert(e instanceof AnchorError);
+          const err: AnchorError = e;
+          assert.strictEqual(
+            err.error.errorCode.number,
+            anchor.LangErrorCode.ConstraintZero
+          );
+        }
+      });
+
+      it("Works with different accounts (`init` and `zero`)", async () => {
+        const initKp = anchor.web3.Keypair.generate();
+        const zeroKp = anchor.web3.Keypair.generate();
+        await program.methods
+          .testInitAndZero()
+          .preInstructions([
+            await program.account.data.createInstruction(zeroKp),
+          ])
+          .accounts({ init: initKp.publicKey, zero: zeroKp.publicKey })
+          .signers([initKp, zeroKp])
+          .rpc();
+      });
+
+      it("Throws with the same account (`init` and `zero`)", async () => {
+        const kp = anchor.web3.Keypair.generate();
+        try {
+          await program.methods
+            .testInitAndZero()
+            .accounts({ init: kp.publicKey, zero: kp.publicKey })
+            .signers([kp])
+            .rpc();
+          assert.fail("Transaction did not fail!");
+        } catch (e) {
+          assert(e instanceof AnchorError);
+          const err: AnchorError = e;
+          assert.strictEqual(
+            err.error.errorCode.number,
+            anchor.LangErrorCode.ConstraintZero
+          );
+        }
       });
     });
   };

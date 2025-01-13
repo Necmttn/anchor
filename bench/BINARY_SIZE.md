@@ -14,13 +14,42 @@ The programs and their tests are located in [/tests/bench](https://github.com/co
 
 ## [Unreleased]
 
-Solana version: 1.17.0
+Solana version: 2.1.0
 
-| Program | Binary Size | -                   |
-| ------- | ----------- | ------------------- |
-| bench   | 743,208     | 🔴 **+152 (0.02%)** |
+| Program | Binary Size | -                        |
+| ------- | ----------- | ------------------------ |
+| bench   | 1,041,928   | 🔴 **+250,920 (31.72%)** |
 
 ### Notable changes
+
+- lang: Use closures for `init` constraints to reduce the stack usage of `try_accounts`. Note that the binary size increase is exaggerated for the bench program because it uses unusual number of `init` constraints. Impact for normal programs will be a lot less severe. ([#2939](https://github.com/coral-xyz/anchor/pull/2939)).
+- Upgrade to Solana `2.1.0`. This upgrade decreased the binary size ~5% (55,000 bytes) ([#3339](https://github.com/coral-xyz/anchor/pull/3339)).
+
+---
+
+## [0.30.1]
+
+Solana version: 1.18.17
+
+| Program | Binary Size | -   |
+| ------- | ----------- | --- |
+| bench   | 791,008     | -   |
+
+### Notable changes
+
+---
+
+## [0.30.0]
+
+Solana version: 1.18.8
+
+| Program | Binary Size | -                      |
+| ------- | ----------- | ---------------------- |
+| bench   | 791,008     | 🔴 **+47,952 (6.45%)** |
+
+### Notable changes
+
+- Upgrade Solana to `1.18.8` ([#2867](https://github.com/coral-xyz/anchor/pull/2867)).
 
 ---
 
