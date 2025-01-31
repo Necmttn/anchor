@@ -1,7 +1,8 @@
 import * as toml from "toml";
-import { snakeCase } from "snake-case";
+import camelcase from "camelcase";
 import { Program } from "./program/index.js";
 import { isBrowser } from "./utils/common.js";
+import { Idl } from "./idl.js";
 
 /**
  * The `workspace` namespace provides a convenience API to automatically
@@ -18,27 +19,10 @@ const workspace = new Proxy(
         throw new Error("Workspaces aren't available in the browser");
       }
 
-      // Converting `programName` to snake_case enables the ability to use any
+      // Converting `programName` to camelCase enables the ability to use any
       // of the following to access the workspace program:
       // `workspace.myProgram`, `workspace.MyProgram`, `workspace["my-program"]`...
-      programName = snakeCase(programName);
-
-      // Check whether the program name contains any digits
-      if (/\d/.test(programName)) {
-        // Numbers cannot be properly converted from camelCase to snake_case,
-        // e.g. if the `programName` is `myProgram2`, the actual program name could
-        // be `my_program2` or `my_program_2`. This implementation assumes the
-        // latter as the default and always converts to `_numbers`.
-        //
-        // A solution to the conversion of program names with numbers in them
-        // would be to always convert the `programName` to camelCase instead of
-        // snake_case. The problem with this approach is that it would require
-        // converting everything else e.g. program names in Anchor.toml and IDL
-        // file names which are both snake_case.
-        programName = programName
-          .replace(/\d+/g, (match) => "_" + match)
-          .replace("__", "_");
-      }
+      programName = camelcase(programName);
 
       // Return early if the program is in cache
       if (workspaceCache[programName]) return workspaceCache[programName];
@@ -49,7 +33,13 @@ const workspace = new Proxy(
       // Override the workspace programs if the user put them in the config.
       const anchorToml = toml.parse(fs.readFileSync("Anchor.toml"));
       const clusterId = anchorToml.provider.cluster;
-      const programEntry = anchorToml.programs?.[clusterId]?.[programName];
+      const programs = anchorToml.programs?.[clusterId];
+      let programEntry;
+      if (programs) {
+        programEntry = Object.entries(programs).find(
+          ([key]) => camelcase(key) === programName
+        )?.[1];
+      }
 
       let idlPath: string;
       let programId;
@@ -57,7 +47,22 @@ const workspace = new Proxy(
         idlPath = programEntry.idl;
         programId = programEntry.address;
       } else {
-        idlPath = path.join("target", "idl", `${programName}.json`);
+        // Assuming the IDL file's name to be the snake_case name of the
+        // `programName` with `.json` extension results in problems when
+        // numbers are involved due to the nature of case conversion from
+        // camelCase to snake_case being lossy.
+        //
+        // To avoid the above problem with numbers, read the `idl` directory and
+        // compare the camelCased  version of both file names and `programName`.
+        const idlDirPath = path.join("target", "idl");
+        const fileName = fs
+          .readdirSync(idlDirPath)
+          .find((name) => camelcase(path.parse(name).name) === programName);
+        if (!fileName) {
+          throw new Error(`Failed to find IDL of program \`${programName}\``);
+        }
+
+        idlPath = path.join(idlDirPath, fileName);
       }
 
       if (!fs.existsSync(idlPath)) {
@@ -66,17 +71,11 @@ const workspace = new Proxy(
         );
       }
 
-      const idl = JSON.parse(fs.readFileSync(idlPath));
-      if (!programId) {
-        if (!idl.metadata?.address) {
-          throw new Error(
-            `IDL for program \`${programName}\` does not have \`metadata.address\` field.\n` +
-              "To add the missing field, run `anchor deploy` or `anchor test`."
-          );
-        }
-        programId = idl.metadata.address;
+      const idl: Idl = JSON.parse(fs.readFileSync(idlPath));
+      if (programId) {
+        idl.address = programId;
       }
-      workspaceCache[programName] = new Program(idl, programId);
+      workspaceCache[programName] = new Program(idl);
 
       return workspaceCache[programName];
     },

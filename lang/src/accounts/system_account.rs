@@ -2,11 +2,7 @@
 
 use crate::error::ErrorCode;
 use crate::*;
-use solana_program::account_info::AccountInfo;
-use solana_program::instruction::AccountMeta;
-use solana_program::pubkey::Pubkey;
 use solana_program::system_program;
-use std::collections::BTreeSet;
 use std::ops::Deref;
 
 /// Type validating that the account is owned by the system program
@@ -53,7 +49,7 @@ impl<'info, B> Accounts<'info, B> for SystemAccount<'info> {
 
 impl<'info> AccountsExit<'info> for SystemAccount<'info> {}
 
-impl<'info> ToAccountMetas for SystemAccount<'info> {
+impl ToAccountMetas for SystemAccount<'_> {
     fn to_account_metas(&self, is_signer: Option<bool>) -> Vec<AccountMeta> {
         let is_signer = is_signer.unwrap_or(self.info.is_signer);
         let meta = match self.info.is_writable {
@@ -84,7 +80,7 @@ impl<'info> Deref for SystemAccount<'info> {
     }
 }
 
-impl<'info> Key for SystemAccount<'info> {
+impl Key for SystemAccount<'_> {
     fn key(&self) -> Pubkey {
         *self.info.key
     }

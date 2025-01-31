@@ -1,35 +1,40 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Error, Result};
 use cargo_toml::Manifest;
-use once_cell::sync::Lazy;
+use chrono::{TimeZone, Utc};
 use reqwest::header::USER_AGENT;
 use reqwest::StatusCode;
 use semver::{Prerelease, Version};
 use serde::{de, Deserialize};
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 
-/// Storage directory for AVM, ~/.avm
-pub static AVM_HOME: Lazy<PathBuf> = Lazy::new(|| {
+/// Storage directory for AVM, customizable by setting the $AVM_HOME, defaults to ~/.avm
+pub static AVM_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
     cfg_if::cfg_if! {
         if #[cfg(test)] {
             let dir = tempfile::tempdir().expect("Could not create temporary directory");
             dir.path().join(".avm")
         } else {
-            let mut user_home = dirs::home_dir().expect("Could not find home directory");
-            user_home.push(".avm");
-            user_home
+            if let Ok(avm_home) = std::env::var("AVM_HOME") {
+                PathBuf::from(avm_home)
+            } else {
+                let mut user_home = dirs::home_dir().expect("Could not find home directory");
+                user_home.push(".avm");
+                user_home
+            }
         }
     }
 });
 
-/// Path to the current version file ~/.avm/.version
+/// Path to the current version file $AVM_HOME/.version
 fn current_version_file_path() -> PathBuf {
     AVM_HOME.join(".version")
 }
 
-/// Path to the current version file ~/.avm/bin
+/// Path to the current version file $AVM_HOME/bin
 fn get_bin_dir_path() -> PathBuf {
     AVM_HOME.join("bin")
 }
@@ -75,16 +80,16 @@ pub fn use_version(opt_version: Option<Version>) -> Result<()> {
     // Make sure the requested version is installed
     let installed_versions = read_installed_versions()?;
     if !installed_versions.contains(&version) {
-        if let Ok(current) = current_version() {
-            println!("Version {version} is not installed, staying on version {current}.");
-        } else {
-            println!("Version {version} is not installed, no current version.");
-        }
-
-        return Err(anyhow!(
-            "You need to run 'avm install {}' to install it before using it.",
-            version
-        ));
+        println!("Version {version} is not installed. Would you like to install? [y/n]");
+        let input = std::io::stdin()
+            .lock()
+            .lines()
+            .next()
+            .expect("Expected input")?;
+        match input.as_str() {
+            "y" | "yes" => return install_version(InstallTarget::Version(version), false, false),
+            _ => return Err(anyhow!("Installation rejected.")),
+        };
     }
 
     let mut current_version_file = fs::File::create(current_version_file_path())?;
@@ -102,7 +107,7 @@ pub enum InstallTarget {
 /// Update to the latest version
 pub fn update() -> Result<()> {
     let latest_version = get_latest_version()?;
-    install_version(InstallTarget::Version(latest_version), false)
+    install_version(InstallTarget::Version(latest_version), false, false)
 }
 
 /// The commit sha provided can be shortened,
@@ -160,52 +165,120 @@ fn get_anchor_version_from_commit(commit: &str) -> Result<Version> {
 }
 
 /// Install a version of anchor-cli
-pub fn install_version(install_target: InstallTarget, force: bool) -> Result<()> {
-    let mut args: Vec<String> = vec![
-        "install".into(),
-        "--git".into(),
-        "https://github.com/coral-xyz/anchor".into(),
-        "anchor-cli".into(),
-        "--locked".into(),
-        "--root".into(),
-        AVM_HOME.to_str().unwrap().into(),
-    ];
-    let version = match install_target {
-        InstallTarget::Version(version) => {
-            args.extend(["--tag".into(), format!("v{}", version), "anchor-cli".into()]);
-            version
-        }
-        InstallTarget::Commit(commit) => {
-            args.extend(["--rev".into(), commit.clone()]);
-            get_anchor_version_from_commit(&commit)?
-        }
+pub fn install_version(
+    install_target: InstallTarget,
+    force: bool,
+    from_source: bool,
+) -> Result<()> {
+    let version = match &install_target {
+        InstallTarget::Version(version) => version.to_owned(),
+        InstallTarget::Commit(commit) => get_anchor_version_from_commit(commit)?,
     };
-
-    // If version is already installed we ignore the request.
-    let installed_versions = read_installed_versions()?;
-    if installed_versions.contains(&version) && !force {
-        println!("Version {version} is already installed");
+    // Return early if version is already installed
+    if !force && read_installed_versions()?.contains(&version) {
+        eprintln!("Version `{version}` is already installed");
         return Ok(());
     }
 
-    let exit = std::process::Command::new("cargo")
-        .args(args)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
-        .map_err(|e| anyhow!("Cargo install for {} failed: {}", version, e.to_string()))?;
-    if !exit.status.success() {
-        return Err(anyhow!(
-            "Failed to install {}, is it a valid version?",
-            version
-        ));
-    }
+    let is_commit = matches!(install_target, InstallTarget::Commit(_));
+    let is_older_than_v0_31_0 = version < Version::parse("0.31.0")?;
+    if from_source || is_commit || is_older_than_v0_31_0 {
+        // Build from source using `cargo install --git`
+        let mut args: Vec<String> = vec![
+            "install".into(),
+            "anchor-cli".into(),
+            "--git".into(),
+            "https://github.com/coral-xyz/anchor".into(),
+            "--locked".into(),
+            "--root".into(),
+            AVM_HOME.to_str().unwrap().into(),
+        ];
+        let conditional_args = match install_target {
+            InstallTarget::Version(version) => ["--tag".into(), format!("v{}", version)],
+            InstallTarget::Commit(commit) => ["--rev".into(), commit],
+        };
+        args.extend_from_slice(&conditional_args);
 
-    let bin_dir = get_bin_dir_path();
-    fs::rename(
-        bin_dir.join("anchor"),
-        bin_dir.join(format!("anchor-{version}")),
-    )?;
+        // If the version is older than v0.31, install using `rustc 1.79.0` to get around the problem
+        // explained in https://github.com/coral-xyz/anchor/pull/3143
+        if is_older_than_v0_31_0 {
+            const REQUIRED_VERSION: &str = "1.79.0";
+            let is_installed = Command::new("rustup")
+                .args(["toolchain", "list"])
+                .output()
+                .map(|output| String::from_utf8(output.stdout))??
+                .lines()
+                .any(|line| line.starts_with(REQUIRED_VERSION));
+            if !is_installed {
+                let exit_status = Command::new("rustup")
+                    .args(["toolchain", "install", REQUIRED_VERSION])
+                    .spawn()?
+                    .wait()?;
+                if !exit_status.success() {
+                    return Err(anyhow!(
+                        "Installation of `rustc {REQUIRED_VERSION}` failed. \
+                    `rustc <1.80` is required to install Anchor v{version} from source. \
+                    See https://github.com/coral-xyz/anchor/pull/3143 for more information."
+                    ));
+                }
+            }
+
+            // Prepend the toolchain to use with the `cargo install` command
+            args.insert(0, format!("+{REQUIRED_VERSION}"));
+        }
+
+        let output = Command::new("cargo")
+            .args(args)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|e| anyhow!("`cargo install` for version `{version}` failed: {e}"))?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to install {version}, is it a valid version?"
+            ));
+        }
+
+        let bin_dir = get_bin_dir_path();
+        let bin_name = if cfg!(target_os = "windows") {
+            "anchor.exe"
+        } else {
+            "anchor"
+        };
+        fs::rename(bin_dir.join(bin_name), version_binary_path(&version))?;
+    } else {
+        let output = Command::new("rustc").arg("-vV").output()?;
+        let target = core::str::from_utf8(&output.stdout)?
+            .lines()
+            .find(|line| line.starts_with("host:"))
+            .and_then(|line| line.split(':').last())
+            .ok_or_else(|| anyhow!("`host` not found from `rustc -vV` output"))?
+            .trim();
+        let ext = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
+        let res = reqwest::blocking::get(format!(
+            "https://github.com/coral-xyz/anchor/releases/download/v{version}/anchor-{version}-{target}{ext}"
+        ))?;
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "Failed to download the binary for version `{version}` (status code: {})",
+                res.status()
+            ));
+        }
+
+        let bin_path = version_binary_path(&version);
+        fs::write(&bin_path, res.bytes()?)?;
+
+        // Set file to executable on UNIX
+        #[cfg(unix)]
+        fs::set_permissions(
+            bin_path,
+            <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o775),
+        )?;
+    }
 
     // If .version file is empty or not parseable, write the newly installed version to it
     if current_version().is_err() {
@@ -218,7 +291,7 @@ pub fn install_version(install_target: InstallTarget, force: bool) -> Result<()>
 
 /// Remove an installed version of anchor-cli
 pub fn uninstall_version(version: &Version) -> Result<()> {
-    let version_path = get_bin_dir_path().join(format!("anchor-{version}"));
+    let version_path = version_binary_path(version);
     if !version_path.exists() {
         return Err(anyhow!("anchor-cli {} is not installed", version));
     }
@@ -240,7 +313,7 @@ pub fn read_anchorversion_file() -> Result<Version> {
 
 /// Retrieve a list of installable versions of anchor-cli using the GitHub API and tags on the Anchor
 /// repository.
-pub fn fetch_versions() -> Result<Vec<Version>> {
+pub fn fetch_versions() -> Result<Vec<Version>, Error> {
     #[derive(Deserialize)]
     struct Release {
         #[serde(rename = "name", deserialize_with = "version_deserializer")]
@@ -255,16 +328,30 @@ pub fn fetch_versions() -> Result<Vec<Version>> {
         Version::parse(s.trim_start_matches('v')).map_err(de::Error::custom)
     }
 
-    let versions = reqwest::blocking::Client::new()
+    let response = reqwest::blocking::Client::new()
         .get("https://api.github.com/repos/coral-xyz/anchor/tags")
         .header(USER_AGENT, "avm https://github.com/coral-xyz/anchor")
-        .send()?
-        .json::<Vec<Release>>()?
-        .into_iter()
-        .map(|release| release.version)
-        .collect();
+        .send()?;
 
-    Ok(versions)
+    if response.status().is_success() {
+        let releases: Vec<Release> = response.json()?;
+        let versions = releases.into_iter().map(|r| r.version).collect();
+        Ok(versions)
+    } else {
+        let reset_time_header = response
+            .headers()
+            .get("X-RateLimit-Reset")
+            .map_or("unknown", |v| v.to_str().unwrap());
+        let t = Utc.timestamp_opt(reset_time_header.parse::<i64>().unwrap(), 0);
+        let reset_time = t
+            .single()
+            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        Err(anyhow!(
+            "GitHub API rate limit exceeded. Try again after {} UTC.",
+            reset_time
+        ))
+    }
 }
 
 /// Print available versions and flags indicating installed, current and latest

@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Error, Result};
 use avm::InstallTarget;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use semver::Version;
-
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[clap(name = "avm", about = "Anchor version manager", version)]
@@ -19,7 +17,7 @@ pub enum Commands {
         #[clap(value_parser = parse_version, required = false)]
         version: Option<Version>,
     },
-    #[clap(about = "Install a version of Anchor")]
+    #[clap(about = "Install a version of Anchor", alias = "i")]
     Install {
         /// Anchor version or commit
         #[clap(value_parser = parse_install_target)]
@@ -28,16 +26,24 @@ pub enum Commands {
         /// Flag to force installation even if the version
         /// is already installed
         force: bool,
+        #[clap(long)]
+        /// Build from source code rather than downloading prebuilt binaries
+        from_source: bool,
     },
     #[clap(about = "Uninstall a version of Anchor")]
     Uninstall {
         #[clap(value_parser = parse_version)]
         version: Version,
     },
-    #[clap(about = "List available versions of Anchor")]
+    #[clap(about = "List available versions of Anchor", alias = "ls")]
     List {},
     #[clap(about = "Update to the latest Anchor version")]
     Update {},
+    #[clap(about = "Generate shell completions for AVM")]
+    Completions {
+        #[clap(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 // If `latest` is passed use the latest available version.
@@ -74,10 +80,15 @@ pub fn entry(opts: Cli) -> Result<()> {
         Commands::Install {
             version_or_commit,
             force,
-        } => avm::install_version(version_or_commit, force),
+            from_source,
+        } => avm::install_version(version_or_commit, force, from_source),
         Commands::Uninstall { version } => avm::uninstall_version(&version),
         Commands::List {} => avm::list_versions(),
         Commands::Update {} => avm::update(),
+        Commands::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "avm", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
 

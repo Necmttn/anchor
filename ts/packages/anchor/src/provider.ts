@@ -11,6 +11,9 @@ import {
   SendOptions,
   VersionedTransaction,
   RpcResponseAndContext,
+  BlockhashWithExpiryBlockHeight,
+  SignatureResult,
+  Keypair,
 } from "@solana/web3.js";
 import { bs58 } from "./utils/bytes/index.js";
 import { isBrowser, isVersionedTransaction } from "./utils/common.js";
@@ -22,6 +25,7 @@ import {
 export default interface Provider {
   readonly connection: Connection;
   readonly publicKey?: PublicKey;
+  readonly wallet?: Wallet;
 
   send?(
     tx: Transaction | VersionedTransaction,
@@ -31,7 +35,7 @@ export default interface Provider {
   sendAndConfirm?(
     tx: Transaction | VersionedTransaction,
     signers?: Signer[],
-    opts?: ConfirmOptions
+    opts?: ConfirmOptionsWithBlockhash
   ): Promise<TransactionSignature>;
   sendAll?<T extends Transaction | VersionedTransaction>(
     txWithSigners: {
@@ -63,7 +67,7 @@ export class AnchorProvider implements Provider {
   constructor(
     readonly connection: Connection,
     readonly wallet: Wallet,
-    readonly opts: ConfirmOptions
+    readonly opts: ConfirmOptions = AnchorProvider.defaultOptions()
   ) {
     this.publicKey = wallet?.publicKey;
   }
@@ -83,11 +87,14 @@ export class AnchorProvider implements Provider {
    *
    * (This api is for Node only.)
    */
-  static local(url?: string, opts?: ConfirmOptions): AnchorProvider {
+  static local(
+    url?: string,
+    opts: ConfirmOptions = AnchorProvider.defaultOptions()
+  ): AnchorProvider {
     if (isBrowser) {
       throw new Error(`Provider local is not available on browser.`);
     }
-    opts = opts ?? AnchorProvider.defaultOptions();
+
     const connection = new Connection(
       url ?? "http://127.0.0.1:8899",
       opts.preflightCommitment
@@ -131,7 +138,7 @@ export class AnchorProvider implements Provider {
   async sendAndConfirm(
     tx: Transaction | VersionedTransaction,
     signers?: Signer[],
-    opts?: ConfirmOptions
+    opts?: ConfirmOptionsWithBlockhash
   ): Promise<TransactionSignature> {
     if (opts === undefined) {
       opts = this.opts;
@@ -171,8 +178,10 @@ export class AnchorProvider implements Provider {
             ? tx.signatures?.[0] || new Uint8Array()
             : tx.signature ?? new Uint8Array()
         );
+        const maxVer = isVersionedTransaction(tx) ? 0 : undefined;
         const failedTx = await this.connection.getTransaction(txSig, {
           commitment: "confirmed",
+          maxSupportedTransactionVersion: maxVer,
         });
         if (!failedTx) {
           throw err;
@@ -253,8 +262,10 @@ export class AnchorProvider implements Provider {
               ? tx.signatures?.[0] || new Uint8Array()
               : tx.signature ?? new Uint8Array()
           );
+          const maxVer = isVersionedTransaction(tx) ? 0 : undefined;
           const failedTx = await this.connection.getTransaction(txSig, {
             commitment: "confirmed",
+            maxSupportedTransactionVersion: maxVer,
           });
           if (!failedTx) {
             throw err;
@@ -341,6 +352,10 @@ export type SendTxRequest = {
   signers: Array<Signer | undefined>;
 };
 
+export type ConfirmOptionsWithBlockhash = ConfirmOptions & {
+  blockhash?: BlockhashWithExpiryBlockHeight;
+};
+
 /**
  * Wallet interface for objects that can be used to sign provider transactions.
  * VersionedTransactions sign everything at once
@@ -353,6 +368,8 @@ export interface Wallet {
     txs: T[]
   ): Promise<T[]>;
   publicKey: PublicKey;
+  /** Keypair of the configured payer (Node only) */
+  payer?: Keypair;
 }
 
 // Copy of Connection.sendAndConfirmRawTransaction that throws
@@ -360,32 +377,69 @@ export interface Wallet {
 async function sendAndConfirmRawTransaction(
   connection: Connection,
   rawTransaction: Buffer | Uint8Array,
-  options?: ConfirmOptions
+  options?: ConfirmOptionsWithBlockhash
 ): Promise<TransactionSignature> {
-  const sendOptions = options && {
-    skipPreflight: options.skipPreflight,
-    preflightCommitment: options.preflightCommitment || options.commitment,
-  };
+  const sendOptions: SendOptions = options
+    ? {
+        skipPreflight: options.skipPreflight,
+        preflightCommitment: options.preflightCommitment || options.commitment,
+        maxRetries: options.maxRetries,
+        minContextSlot: options.minContextSlot,
+      }
+    : {};
 
-  const signature = await connection.sendRawTransaction(
-    rawTransaction,
-    sendOptions
-  );
+  let status: SignatureResult;
 
-  const status = (
-    await connection.confirmTransaction(
-      signature,
-      options && options.commitment
-    )
-  ).value;
+  const startTime = Date.now();
+  while (Date.now() - startTime < 60_000) {
+    try {
+      const signature = await connection.sendRawTransaction(
+        rawTransaction,
+        sendOptions
+      );
 
-  if (status.err) {
-    throw new ConfirmError(
-      `Raw transaction ${signature} failed (${JSON.stringify(status)})`
-    );
+      if (options?.blockhash) {
+        if (sendOptions.maxRetries === 0) {
+          const abortSignal = AbortSignal.timeout(15_000);
+          status = (
+            await connection.confirmTransaction(
+              { abortSignal, signature, ...options.blockhash },
+              options && options.commitment
+            )
+          ).value;
+        } else {
+          status = (
+            await connection.confirmTransaction(
+              { signature, ...options.blockhash },
+              options && options.commitment
+            )
+          ).value;
+        }
+      } else {
+        status = (
+          await connection.confirmTransaction(
+            signature,
+            options && options.commitment
+          )
+        ).value;
+      }
+
+      if (status.err) {
+        throw new ConfirmError(
+          `Raw transaction ${signature} failed (${JSON.stringify(status)})`
+        );
+      }
+
+      return signature;
+    } catch (err) {
+      if (err.name === "TimeoutError") {
+        continue;
+      }
+      throw err;
+    }
   }
 
-  return signature;
+  throw Error("Transaction failed to confirm in 60s");
 }
 
 class ConfirmError extends Error {

@@ -94,7 +94,8 @@ use syn::parse_macro_input;
 ///             </td>
 ///             <td>
 ///                 Creates the account via a CPI to the system program and
-///                 initializes it (sets its account discriminator).<br>
+///                 initializes it (sets its account discriminator). The annotated account is required to sign for this instruction
+///                 unless `seeds` is provided. <br>
 ///                 Marks the account as mutable and is mutually exclusive with <code>mut</code>.<br>
 ///                 Makes the account rent exempt unless skipped with <code>rent_exempt = skip</code>.<br><br>
 ///                 Use <code>#[account(zero)]</code> for accounts larger than 10 Kibibyte.<br><br>
@@ -591,16 +592,16 @@ use syn::parse_macro_input;
 ///                 <br><br>
 ///                 Example:
 ///                 <pre>
-/// use anchor_spl::{mint, token::{TokenAccount, Mint, Token}};
+/// use anchor_spl::token_interface::{TokenInterface, TokenAccount, Mint};
 /// ...&#10;
 /// #[account(
 ///     mint::token_program = token_a_token_program,
 /// )]
-/// pub token_a_mint: Box<InterfaceAccount<'info, Mint>>,
+/// pub token_a_mint: InterfaceAccount<'info, Mint>,
 /// #[account(
 ///     mint::token_program = token_b_token_program,
 /// )]
-/// pub token_b_mint: Box<InterfaceAccount<'info, Mint>>,
+/// pub token_b_mint: InterfaceAccount<'info, Mint>,
 /// #[account(
 ///     init,
 ///     payer = payer,
@@ -608,7 +609,7 @@ use syn::parse_macro_input;
 ///     token::authority = payer,
 ///     token::token_program = token_a_token_program,
 /// )]
-/// pub token_a_account: Box<InterfaceAccount<'info, TokenAccount>>,
+/// pub token_a_account: InterfaceAccount<'info, TokenAccount>,
 /// #[account(
 ///     init,
 ///     payer = payer,
@@ -616,7 +617,7 @@ use syn::parse_macro_input;
 ///     token::authority = payer,
 ///     token::token_program = token_b_token_program,
 /// )]
-/// pub token_b_account: Box<InterfaceAccount<'info, TokenAccount>>,
+/// pub token_b_account: InterfaceAccount<'info, TokenAccount>,
 /// pub token_a_token_program: Interface<'info, TokenInterface>,
 /// pub token_b_token_program: Interface<'info, TokenInterface>,
 /// #[account(mut)]
@@ -628,7 +629,7 @@ use syn::parse_macro_input;
 ///     <tbody>
 /// </table>
 #[proc_macro_derive(Accounts, attributes(account, instruction))]
-pub fn derive_anchor_deserialize(item: TokenStream) -> TokenStream {
+pub fn derive_accounts(item: TokenStream) -> TokenStream {
     parse_macro_input!(item as anchor_syn::AccountsStruct)
         .to_token_stream()
         .into()
